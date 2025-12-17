@@ -75,7 +75,8 @@ class VQVAE(nn.Module):
         z_e = self.encoder(x)
         z_q, vq_loss, indices = self.vq(z_e)
         x_hat = self.decoder(z_q)
-        return x_hat, vq_loss, indices
+        # return x_hat, vq_loss, indices
+        return x_hat, 0.001 * vq_loss, indices
 
     @torch.no_grad()
     def encode_indices(self, x):
