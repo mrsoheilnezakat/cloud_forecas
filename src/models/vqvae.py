@@ -29,54 +29,112 @@ class Decoder(nn.Module):
     def forward(self, z):
         return self.net(z)
 
-class VectorQuantizer(nn.Module):
-    def __init__(self, num_embeddings=512, embedding_dim=64, commitment_cost=0.25):
+# class VectorQuantizer(nn.Module):
+#     def __init__(self, num_embeddings=512, embedding_dim=64, commitment_cost=0.25):
+#         super().__init__()
+#         self.num_embeddings = int(num_embeddings)
+#         self.embedding_dim = int(embedding_dim)
+#         self.commitment_cost = float(commitment_cost)
+
+#         self.emb = nn.Embedding(self.num_embeddings, self.embedding_dim)
+#         self.emb.weight.data.uniform_(-1.0/self.num_embeddings, 1.0/self.num_embeddings)
+
+#     def forward(self, z_e):
+#         B, D, H, W = z_e.shape
+#         z = z_e.permute(0,2,3,1).contiguous()      # (B,H,W,D)
+#         flat = z.view(-1, D)                       # (BHW, D)
+
+#         emb_w = self.emb.weight                    # (K,D)
+#         dist = (flat.pow(2).sum(1, keepdim=True)
+#                 - 2 * flat @ emb_w.t()
+#                 + emb_w.pow(2).sum(1, keepdim=True).t())  # (BHW,K)
+
+#         indices = torch.argmin(dist, dim=1)        # (BHW,)
+#         z_q = self.emb(indices).view(B, H, W, D)
+
+#         # losses
+#         z_q_detached = z_q.detach()
+#         z_detached = z.detach()
+#         loss = F.mse_loss(z_q_detached, z_detached) + self.commitment_cost * F.mse_loss(z_q, z_detached)
+
+#         # straight-through estimator
+#         z_q = z + (z_q - z).detach()
+
+#         z_q = z_q.permute(0,3,1,2).contiguous()    # (B,D,H,W)
+#         indices = indices.view(B, H, W)
+#         return z_q, loss, indices
+
+class VectorQuantizerEMA(nn.Module):
+    def __init__(self, num_embeddings=512, embedding_dim=64, commitment_cost=0.25, decay=0.99, eps=1e-5):
         super().__init__()
         self.num_embeddings = int(num_embeddings)
         self.embedding_dim = int(embedding_dim)
         self.commitment_cost = float(commitment_cost)
+        self.decay = float(decay)
+        self.eps = float(eps)
 
         self.emb = nn.Embedding(self.num_embeddings, self.embedding_dim)
-        self.emb.weight.data.uniform_(-1.0/self.num_embeddings, 1.0/self.num_embeddings)
+        self.emb.weight.data.normal_()
+
+        self.register_buffer("ema_cluster_size", torch.zeros(self.num_embeddings))
+        self.register_buffer("ema_w", self.emb.weight.data.clone())
 
     def forward(self, z_e):
+        # z_e: (B, D, H, W)
         B, D, H, W = z_e.shape
-        z = z_e.permute(0,2,3,1).contiguous()      # (B,H,W,D)
-        flat = z.view(-1, D)                       # (BHW, D)
+        z = z_e.permute(0, 2, 3, 1).contiguous()  # (B,H,W,D)
+        flat = z.view(-1, D)                      # (N, D)
 
-        emb_w = self.emb.weight                    # (K,D)
+        # distances (N, K)
+        emb_w = self.emb.weight
         dist = (flat.pow(2).sum(1, keepdim=True)
                 - 2 * flat @ emb_w.t()
-                + emb_w.pow(2).sum(1, keepdim=True).t())  # (BHW,K)
+                + emb_w.pow(2).sum(1, keepdim=True).t())
 
-        indices = torch.argmin(dist, dim=1)        # (BHW,)
-        z_q = self.emb(indices).view(B, H, W, D)
+        indices = torch.argmin(dist, dim=1)              # (N,)
+        encodings = torch.nn.functional.one_hot(indices, self.num_embeddings).type(flat.dtype)  # (N,K)
 
-        # losses
-        z_q_detached = z_q.detach()
-        z_detached = z.detach()
-        loss = F.mse_loss(z_q_detached, z_detached) + self.commitment_cost * F.mse_loss(z_q, z_detached)
+        z_q = self.emb(indices).view(B, H, W, D)         # (B,H,W,D)
 
-        # straight-through estimator
+        if self.training:
+            # EMA updates
+            cluster_size = encodings.sum(0)  # (K,)
+            self.ema_cluster_size.mul_(self.decay).add_(cluster_size, alpha=1 - self.decay)
+
+            dw = encodings.t() @ flat  # (K, D)
+            self.ema_w.mul_(self.decay).add_(dw, alpha=1 - self.decay)
+
+            # normalize
+            n = self.ema_cluster_size.sum()
+            cluster_size = ((self.ema_cluster_size + self.eps) / (n + self.num_embeddings * self.eps)) * n
+            self.emb.weight.data.copy_(self.ema_w / cluster_size.unsqueeze(1))
+
+        # commitment loss only (EMA handles codebook)
+        commit_loss = self.commitment_cost * torch.nn.functional.mse_loss(z, z_q.detach())
+
+        # straight-through
         z_q = z + (z_q - z).detach()
 
-        z_q = z_q.permute(0,3,1,2).contiguous()    # (B,D,H,W)
+        z_q = z_q.permute(0, 3, 1, 2).contiguous()  # (B,D,H,W)
         indices = indices.view(B, H, W)
-        return z_q, loss, indices
+        return z_q, commit_loss, indices
+
 
 class VQVAE(nn.Module):
     def __init__(self, in_channels=1, hidden=128, embedding_dim=64, num_embeddings=512, commitment_cost=0.25):
         super().__init__()
         self.encoder = Encoder(in_ch=in_channels, hidden=hidden, emb_dim=embedding_dim)
-        self.vq = VectorQuantizer(num_embeddings, embedding_dim, commitment_cost)
+        # self.vq = VectorQuantizer(num_embeddings, embedding_dim, commitment_cost)
+        self.vq = VectorQuantizerEMA(num_embeddings=num_embeddings,embedding_dim=embedding_dim,commitment_cost=commitment_cost,decay=0.99)
+
         self.decoder = Decoder(out_ch=in_channels, hidden=hidden, emb_dim=embedding_dim)
 
     def forward(self, x):
         z_e = self.encoder(x)
         z_q, vq_loss, indices = self.vq(z_e)
         x_hat = self.decoder(z_q)
-        # return x_hat, vq_loss, indices
-        return x_hat, 0.001 * vq_loss, indices
+        return x_hat, vq_loss, indices
+        # return x_hat, 0.001 * vq_loss, indices
 
     @torch.no_grad()
     def encode_indices(self, x):

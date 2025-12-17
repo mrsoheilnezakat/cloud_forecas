@@ -4,7 +4,8 @@ device: "cuda"
 data:
   train_dir: "data/train"
   val_dir: "data/val"
-  image_size: 128
+  # image_size: 128
+  image_size: 64
   context_frames: 4
   pred_frames: 1
   stride: 1
@@ -14,8 +15,8 @@ vqvae:
   hidden: 128
   embedding_dim: 64
   num_embeddings: 512
-  # commitment_cost: 0.25
-  commitment_cost: 0.05
+  commitment_cost: 0.25
+  # commitment_cost: 0.05
 
 transformer:
   n_layers: 6
@@ -24,12 +25,14 @@ transformer:
   dropout: 0.1
 
 train:
-  batch_size: 16
-  num_workers: 4
+  # batch_size: 16
+  batch_size: 2
+  # num_workers: 4
+  num_workers: 0
   # lr: 2.0e-4
   # lr: 5.0e-5
   lr: 1.0e-5
-  epochs_vqvae: 1
+  epochs_vqvae: 20
   epochs_transformer: 20
   grad_clip: 1.0
 
