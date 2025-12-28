@@ -5,7 +5,8 @@ data:
   train_dir: "data/train"
   val_dir: "data/val"
   # image_size: 128
-  image_size: 64
+  # image_size: 64
+  image_size: 256
   context_frames: 4
   pred_frames: 1
   stride: 1
@@ -14,26 +15,34 @@ vqvae:
   in_channels: 1
   hidden: 128
   embedding_dim: 64
-  num_embeddings: 512
+  # num_embeddings: 512
+  num_embeddings: 1024
   commitment_cost: 0.25
   # commitment_cost: 0.05
 
 transformer:
-  n_layers: 6
+  # n_layers: 6
+  n_layers: 8
   n_heads: 8
-  d_model: 256
+  # d_model: 256
+  d_model: 512
   dropout: 0.1
 
 train:
   # batch_size: 16
-  batch_size: 2
+  # batch_size: 2
+  batch_size: 64
   # num_workers: 4
-  num_workers: 0
+  # num_workers: 0
+  num_workers: 8
   # lr: 2.0e-4
   # lr: 5.0e-5
-  lr: 1.0e-5
-  epochs_vqvae: 20
-  epochs_transformer: 20
+  # lr: 1.0e-5
+  lr: 2.0e-4
+  # epochs_vqvae: 20
+  epochs_vqvae: 30
+  # epochs_transformer: 20
+  epochs_transformer: 30
   grad_clip: 1.0
 
 sampling:
@@ -41,6 +50,6 @@ sampling:
   top_k: 50
 
 infer:
-  seq_dir: "data/val/seq_0100"   # IMPORTANT: put a real folder here
+  seq_dir: "data/val/seq_0199_MSK"   # IMPORTANT: put a real folder here
   out_dir: "outputs"
   out_name: "pred_next.png"
